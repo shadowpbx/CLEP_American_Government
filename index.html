@@ -44,8 +44,14 @@
       flex-direction: column;
       align-items: center;
       justify-content: flex-start;
-      padding: 1.5rem;
+      padding: 0.75rem;
       overflow-x: hidden;
+    }
+
+    @media (min-width: 768px) {
+      body {
+        padding: 1.5rem;
+      }
     }
 
     /* Core Container */
@@ -94,8 +100,14 @@
       -webkit-backdrop-filter: blur(16px);
       border: 1px solid var(--panel-border);
       border-radius: 20px;
-      padding: 1.5rem;
+      padding: 1rem;
       box-shadow: var(--shadow-lg);
+    }
+
+    @media (min-width: 768px) {
+      .glass-panel {
+        padding: 1.5rem;
+      }
     }
 
     /* Now Playing Section */
@@ -104,6 +116,7 @@
       flex-direction: column;
       align-items: center;
       text-align: center;
+      min-width: 0;
     }
 
     @media (min-width: 768px) {
@@ -159,6 +172,7 @@
     .track-details {
       width: 100%;
       margin-bottom: 1.25rem;
+      overflow: hidden;
     }
 
     .track-title {
