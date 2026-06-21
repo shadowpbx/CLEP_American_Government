@@ -104,8 +104,13 @@
       flex-direction: column;
       align-items: center;
       text-align: center;
-      position: sticky;
-      top: 1.5rem;
+    }
+
+    @media (min-width: 768px) {
+      .player-card {
+        position: sticky;
+        top: 1.5rem;
+      }
     }
 
     .album-art-container {
@@ -384,8 +389,12 @@
     .playlist-panel {
       display: flex;
       flex-direction: column;
-      height: 100%;
-      max-height: 520px;
+    }
+
+    @media (min-width: 768px) {
+      .playlist-panel {
+        max-height: 520px;
+      }
     }
 
     .playlist-header {
