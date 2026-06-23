@@ -399,6 +399,28 @@
       cursor: pointer;
     }
 
+    .text-input {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+      border-radius: 8px;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.85rem;
+      outline: none;
+      transition: all 0.2s ease;
+      width: 100%;
+    }
+
+    .text-input:focus {
+      border-color: var(--accent-color);
+      background: rgba(0, 0, 0, 0.35);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+
+    .text-input::placeholder {
+      color: rgba(255, 255, 255, 0.25);
+    }
+
     /* Playlist Section */
     .playlist-panel {
       display: flex;
@@ -595,7 +617,7 @@
         </button>
       </div>
 
-      <!-- Custom Settings Row (Speed & Custom Loop Playback) -->
+      <!-- Custom Settings Row (Speed, R2 Bucket, & Custom Loop Playback) -->
       <div class="settings-grid">
         <!-- Loop count feature requested by USER -->
         <div class="setting-item">
@@ -629,6 +651,15 @@
             <option value="2">2.0x</option>
           </select>
         </div>
+
+        <!-- Cloudflare R2 Base URL configuration -->
+        <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 0.5rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.75rem; margin-top: 0.25rem;">
+          <span class="setting-label">
+            <span class="material-icons-round">cloud_queue</span>
+            Cloudflare R2 Base URL
+          </span>
+          <input type="text" class="text-input" id="r2BaseUrlInput" placeholder="e.g. https://pub-xxx.r2.dev/" aria-label="Cloudflare R2 Base URL">
+        </div>
       </div>
     </section>
 
@@ -658,11 +689,11 @@
   <!-- HTML5 Audio Core element -->
   <audio id="audioEngine" preload="metadata"></audio>
 
-  <!-- Load playlist.js if it exists -->
+  <!-- Load playlist.js for fallback/legacy support -->
   <script src="playlist.js"></script>
 
   <script>
-    // Fallback if playlist.js is missing or failed to load
+    // Global state for tracks
     if (typeof tracks === 'undefined') {
       window.tracks = [];
     }
@@ -679,6 +710,7 @@
     let currentLoopIteration = 1;  // Tracks current iteration count of the track
     let isPlaying = false;
     let trackSearchQuery = "";
+    let r2BaseUrl = "";            // Cloudflare R2 bucket base URL
 
     // DOM Elements
     const audio = document.getElementById('audioEngine');
@@ -700,6 +732,60 @@
     const loopBadgeText = document.getElementById('loopBadgeText');
     const searchBar = document.getElementById('searchBar');
     const trackListContainer = document.getElementById('trackListContainer');
+    const r2BaseUrlInput = document.getElementById('r2BaseUrlInput');
+
+    // Fetch playlist.json with fallback support
+    async function loadPlaylist() {
+      try {
+        const response = await fetch('playlist.json');
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        const newTracks = data.tracks || [];
+        
+        // Mutate array in place to avoid reassigning/redeclaring `tracks`
+        tracks.length = 0;
+        tracks.push(...newTracks);
+        
+        // Resolve R2 Base URL from localStorage (user override) or playlist.json config
+        const storedR2Url = localStorage.getItem('clep_player_r2_url');
+        if (storedR2Url !== null) {
+          r2BaseUrl = storedR2Url;
+        } else {
+          r2BaseUrl = data.baseUrl || "";
+        }
+        r2BaseUrlInput.value = r2BaseUrl;
+        
+        Log.info(`Loaded ${tracks.length} tracks from playlist.json`);
+      } catch (err) {
+        Log.error("Error loading playlist.json, trying fallback legacy playlist.js", err);
+        
+        // Check if legacy playlist.js has populated tracks already (tracks is not empty)
+        if (typeof tracks !== 'undefined' && tracks.length > 0) {
+          Log.info(`Fallback loaded ${tracks.length} tracks from legacy playlist.js`);
+          
+          // Resolve base URL from playlist.js if available and not overridden in localStorage
+          const storedR2Url = localStorage.getItem('clep_player_r2_url');
+          if (storedR2Url !== null) {
+            r2BaseUrl = storedR2Url;
+          } else if (typeof baseUrl !== 'undefined') {
+            r2BaseUrl = baseUrl;
+          } else {
+            r2BaseUrl = "";
+          }
+        } else {
+          Log.error("No playlist data found. Please generate playlist.json or playlist.js.");
+          r2BaseUrl = localStorage.getItem('clep_player_r2_url') || "";
+        }
+        
+        r2BaseUrlInput.value = r2BaseUrl;
+      }
+      
+      // Render and initialize states once tracks are loaded
+      renderPlaylist();
+      initAppState();
+    }
 
     // Initialize application state from LocalStorage to support seamless walking/mail delivery resume
     function initAppState() {
@@ -747,6 +833,7 @@
         localStorage.setItem('clep_player_loop_limit', targetLoopLimit);
         localStorage.setItem('clep_player_time', audio.currentTime);
         localStorage.setItem('clep_player_speed', audio.playbackRate);
+        localStorage.setItem('clep_player_r2_url', r2BaseUrlInput.value.trim());
       } catch (err) {
         Log.error("Error storing playback state", err);
       }
@@ -827,7 +914,15 @@
       const trackFilename = tracks[index];
       
       // Load source file (relative path resolves correctly locally and on GitHub Pages)
-      audio.src = encodeURIComponent(trackFilename);
+      // Resolve absolute URL using R2 base URL if present
+      let finalUrl = encodeURIComponent(trackFilename);
+      const activeBaseUrl = r2BaseUrlInput.value.trim();
+      if (activeBaseUrl) {
+        const formattedBase = activeBaseUrl.endsWith('/') ? activeBaseUrl : activeBaseUrl + '/';
+        finalUrl = formattedBase + encodeURIComponent(trackFilename);
+      }
+      
+      audio.src = finalUrl;
       audio.load();
 
       // Reset loop iteration state for the newly loaded track
@@ -1064,6 +1159,13 @@
       savePlaybackState();
     });
 
+    // R2 Base URL change handler
+    r2BaseUrlInput.addEventListener('input', (e) => {
+      r2BaseUrl = e.target.value.trim();
+      localStorage.setItem('clep_player_r2_url', r2BaseUrl);
+      savePlaybackState();
+    });
+
     // Search Bar Input Filter Handler
     searchBar.addEventListener('input', (e) => {
       trackSearchQuery = e.target.value;
@@ -1072,9 +1174,8 @@
 
     // Initialize Application
     window.addEventListener('DOMContentLoaded', () => {
-      renderPlaylist();
-      initAppState();
       initMediaSessionControls();
+      loadPlaylist();
     });
   </script>
 </body>

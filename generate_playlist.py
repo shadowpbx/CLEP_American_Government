@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 CLEP Playlist Generator CLI Tool
-Autodetects MP3 files in a directory and generates a playlist.js file for the HTML player.
+Autodetects MP3 files locally or from a remote Cloudflare R2 / S3 URL and generates both playlist.json and playlist.js.
 """
 
 import os
@@ -9,6 +9,8 @@ import re
 import sys
 import json
 import logging
+import urllib.request
+import urllib.parse
 
 # Setup Logger with standard formatting
 logging.basicConfig(
@@ -32,69 +34,157 @@ def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
 
 
+# Regex patterns to parse MP3 filenames from remote directories (HTML or S3 XML listing)
+href_regex = re.compile(r'href=["\']([^"\']+\.mp3(?:[?#][^"\']*)?)["\']', re.IGNORECASE)
+key_regex = re.compile(r'<Key>([^<]+\.mp3)</Key>', re.IGNORECASE)
+
+
+def extract_mp3_tracks(content_str):
+    """
+    Parses HTML or XML string and extracts MP3 filenames.
+    """
+    tracks = []
+    
+    # 1. Try S3 XML <Key> tags first
+    s3_keys = key_regex.findall(content_str)
+    for key in s3_keys:
+        filename = os.path.basename(key)
+        if filename and filename not in tracks:
+            tracks.append(filename)
+            
+    # 2. Try standard HTML links
+    if not tracks:
+        hrefs = href_regex.findall(content_str)
+        for href in hrefs:
+            decoded = urllib.parse.unquote(href)
+            parsed = urllib.parse.urlparse(decoded)
+            filename = os.path.basename(parsed.path)
+            if filename and filename not in tracks:
+                tracks.append(filename)
+                
+    return tracks
+
+
 @click.command()
 @click.option(
     '--dir', '-d', 
     default='.', 
-    help='Directory containing the audio files to scan.', 
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, readable=True)
+    help='Local directory path OR remote HTTP/HTTPS URL containing the audio files to scan.', 
+    type=str
 )
 @click.option(
     '--output', '-o', 
-    default='playlist.js', 
-    help='Output Javascript file path.',
+    default='playlist', 
+    help='Output playlist base name (default "playlist"). Generates both .json and .js versions.',
     type=click.Path()
 )
-def generate_playlist(dir, output):
+@click.option(
+    '--base-url', '-b',
+    default='',
+    help='Override default Cloudflare R2 base URL to prepend to audio tracks (defaults to remote dir URL if remote).'
+)
+def generate_playlist(dir, output, base_url):
     """
-    Scans the specified directory for MP3 files and generates a playlist.js file.
+    Scans a local directory or remote URL for MP3 files and generates both JS and JSON playlist files.
     """
-    logger.info(f"Scanning directory: {os.path.abspath(dir)}")
+    is_remote = dir.startswith('http://') or dir.startswith('https://')
+    mp3_files = []
+    resolved_base_url = base_url
     
-    try:
-        # Input Validation: List contents of target directory
-        all_files = os.listdir(dir)
-    except Exception as e:
-        logger.error(f"Failed to read directory {dir}: {e}")
-        sys.exit(1)
-
-    # Filter for mp3 files
-    mp3_files = [f for f in all_files if f.lower().endswith('.mp3')]
-    
+    if is_remote:
+        logger.info(f"Scanning remote URL: {dir}")
+        if not resolved_base_url:
+            resolved_base_url = dir
+            
+        try:
+            # Set browser user agent to avoid bot blocks by Cloudflare R2
+            req = urllib.request.Request(
+                dir,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                content = response.read().decode('utf-8', errors='ignore')
+                
+            mp3_files = extract_mp3_tracks(content)
+            
+            if not mp3_files:
+                logger.warning(
+                    f"No MP3 files found at remote URL: {dir} (Directory listing may be disabled).\n"
+                    "Attempting local directory fallback to resolve track filenames..."
+                )
+        except Exception as e:
+            logger.error(f"Failed to fetch remote directory listing: {e}")
+            logger.warning("Attempting local directory fallback to resolve track filenames...")
+            
     if not mp3_files:
-        logger.warning("No MP3 files found in the target directory.")
-        # Proceed to write an empty playlist.js to reset or initialize it
+        # Fallback to scan local directory
+        local_dir = '.' if is_remote else dir
+        logger.info(f"Scanning local directory: {os.path.abspath(local_dir)}")
+        try:
+            all_files = os.listdir(local_dir)
+            mp3_files = [f for f in all_files if f.lower().endswith('.mp3')]
+        except Exception as e:
+            logger.error(f"Failed to read local directory {local_dir}: {e}")
+            sys.exit(1)
+
+    if not mp3_files:
+        logger.warning("No MP3 files could be resolved locally or remotely.")
     
     # Sort files naturally
     mp3_files.sort(key=natural_sort_key)
-    logger.info(f"Found {len(mp3_files)} MP3 audio file(s).")
+    logger.info(f"Resolved {len(mp3_files)} MP3 audio track(s).")
 
-    # Construct JavaScript file content
-    output_path = os.path.join(dir, output) if not os.path.isabs(output) else output
-    
+    # Resolve output names
+    base_dir = '.' if is_remote else os.path.abspath(dir)
+    filename, ext = os.path.splitext(output)
+    if ext.lower() in ['.json', '.js']:
+        base_name = filename
+    else:
+        base_name = output
+
+    js_path = os.path.join(base_dir, f"{base_name}.js")
+    json_path = os.path.join(base_dir, f"{base_name}.json")
+
+    # Ensure resolved_base_url ends with trailing slash if populated
+    if resolved_base_url and not resolved_base_url.endswith('/'):
+        resolved_base_url += '/'
+
+    # 1. Construct JS format with baseUrl and tracks
     js_content = (
         "// Auto-generated playlist file. Do not edit manually.\n"
         "// Generated by: generate_playlist.py\n\n"
+        f'const baseUrl = "{resolved_base_url}";\n'
         "const tracks = [\n"
     )
-    for filename in mp3_files:
-        # Escape double quotes in filename if any exist
-        escaped_name = filename.replace('"', '\\"')
+    for f_name in mp3_files:
+        escaped_name = f_name.replace('"', '\\"')
         js_content += f'  "{escaped_name}",\n'
     
-    # Remove trailing comma and close array
     if mp3_files:
         js_content = js_content[:-2] + "\n"
     js_content += "];\n"
 
+    # 2. Construct JSON format
+    playlist_data = {
+        "baseUrl": resolved_base_url,
+        "tracks": mp3_files
+    }
+    json_content = json.dumps(playlist_data, indent=2, ensure_ascii=False)
+
     try:
-        # Write content out securely
-        with open(output_path, 'w', encoding='utf-8') as f:
+        # Write JS file
+        with open(js_path, 'w', encoding='utf-8') as f:
             f.write(js_content)
-        logger.info(f"Successfully generated playlist file at: {os.path.abspath(output_path)}")
-        click.echo(f"Success! {len(mp3_files)} tracks saved to {output}")
+        logger.info(f"Successfully generated JS playlist at: {js_path}")
+
+        # Write JSON file
+        with open(json_path, 'w', encoding='utf-8') as f:
+            f.write(json_content)
+        logger.info(f"Successfully generated JSON playlist at: {json_path}")
+
+        click.echo(f"Success! {len(mp3_files)} tracks saved to {base_name}.js and {base_name}.json")
     except Exception as e:
-        logger.error(f"Failed to write playlist file: {e}")
+        logger.error(f"Failed to write playlist files: {e}")
         sys.exit(1)
 
 
