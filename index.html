@@ -567,8 +567,8 @@
 <body>
 
   <header>
-    <h1>American Government</h1>
-    <p>CLEP Examination Prep Playlist</p>
+    <h1 id="mainTitle">American Government</h1>
+    <p id="mainSubtitle">CLEP Examination Prep Playlist</p>
   </header>
 
   <main class="app-container">
@@ -755,6 +755,14 @@
           r2BaseUrl = data.baseUrl || "";
         }
         r2BaseUrlInput.value = r2BaseUrl;
+
+        // Render main title and subtitle dynamically from playlist.json config
+        if (data.title) {
+          document.getElementById('mainTitle').textContent = data.title;
+        }
+        if (data.subtitle) {
+          document.getElementById('mainSubtitle').textContent = data.subtitle;
+        }
         
         Log.info(`Loaded ${tracks.length} tracks from playlist.json`);
       } catch (err) {
@@ -772,6 +780,14 @@
             r2BaseUrl = baseUrl;
           } else {
             r2BaseUrl = "";
+          }
+
+          // Render main title and subtitle from playlist.js if available
+          if (typeof playlistTitle !== 'undefined') {
+            document.getElementById('mainTitle').textContent = playlistTitle;
+          }
+          if (typeof playlistSubtitle !== 'undefined') {
+            document.getElementById('mainSubtitle').textContent = playlistSubtitle;
           }
         } else {
           Log.error("No playlist data found. Please generate playlist.json or playlist.js.");
