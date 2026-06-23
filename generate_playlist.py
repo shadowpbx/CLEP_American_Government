@@ -2,6 +2,9 @@
 """
 CLEP Playlist Generator CLI Tool
 Autodetects MP3 files locally or from a remote Cloudflare R2 / S3 URL and generates both playlist.json and playlist.js.
+
+python3 generate_playlist.py -d "https://audio.epistemicresearch.org/my-new-subject/"
+
 """
 
 import os
